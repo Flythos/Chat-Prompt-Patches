@@ -12,6 +12,7 @@ A rule says: *in field X, find text T, and* insert before it / insert after it /
 - Rules run in list order, so a later rule sees an earlier rule's output.
 - `{{char}}`, `{{user}}` and other macros are substituted in the search and insert texts at apply time, so text copied from the card editor matches; macros in the inserted text resolve normally because patching happens before the prompt is sent.
 - Search is case-sensitive. A per-rule **regex** toggle treats the search text as a pattern (regexes that can match an empty string are rejected). Multi-match rules act on the first occurrence unless "apply to all matches" is set.
+- Each rule has an **"Include in World Info Scanning"** checkbox (the same mechanism as Author's Note's option of that name). While the rule is active and its status dot shows the search text was found (green/amber), the inserted text is registered as a *scan-only* injection, so lorebook entries can activate from the patch text — even though it is not part of the chat history. Only text the patch **adds** is scanned, and the scan entry never appears in the prompt itself. Leave it unchecked and the patch stays invisible to the lorebook scanner (previous behavior).
 
 ## Install
 
@@ -30,6 +31,7 @@ Requires SillyTavern 1.19.x. Group chats are not supported yet — the panel wor
 - On **chat completion** APIs, each card field lands in the prompt as a message with a known identifier (`charDescription`, `charPersonality`, `scenario`, `main` for the card's system prompt, `jailbreak` for post-history instructions, `dialogueExamples*` for example messages). Rules patch exactly that message's content. If the field's message doesn't exist (empty field, or consecutive system messages were squashed under a different identifier), the rule falls back to the first system-role message containing the search text — chat history is never touched by the fallback.
 - On **text completion**, the card is baked into one flat story string; the field selector then only drives validation, and the rule is applied to the final prompt string.
 - Definitions are stored in the character record (`data.extensions.prompt_patches`), which is embedded in the card's `json_data` — so exported/shared cards carry their rules with them.
+- "Include in World Info Scanning" uses ST's own injection mechanism: the rule's insert text is registered via `setExtensionPrompt` at position NONE with the scan flag — `checkWorldInfo` feeds scan-flagged injections into the World Info scan buffer, while position NONE keeps the injection out of the assembled prompt. Macros are substituted by ST at scan time. The gate is deliberately strict: the scan entry exists only while the rule is active *and* its search text is actually found, so phantom text can never trigger entries. Note that card-field text a patch removes or replaces is not "un-scanned" — whether ST scans the description/scenario/etc. at all is decided per lorebook entry in the World Info editor.
 
 ## Development
 

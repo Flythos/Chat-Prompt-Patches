@@ -15,6 +15,7 @@
 //     insert: string,              // inserted text; replace + empty insert = removal
 //     allMatches: boolean,         // false = act on the first match only
 //     forBotCard: boolean,         // true = active in every chat; false = per-chat slider
+//     includeInScan: boolean,      // true = insert text is shown to the World Info scanner while the rule applies
 //   }
 
 export const TARGET_FIELDS = [
@@ -49,6 +50,7 @@ export function normalizeRule(raw) {
         insert: typeof raw?.insert === 'string' ? raw.insert : '',
         allMatches: raw?.allMatches === true,
         forBotCard: raw?.forBotCard === true,
+        includeInScan: raw?.includeInScan === true,
     };
 }
 
@@ -111,6 +113,23 @@ export function validateRule(rule, fieldText) {
     }
     const status = matches.length === 0 ? 'missing' : matches.length === 1 ? 'ok' : 'multi';
     return { status, count: matches.length, error: null, warning };
+}
+
+/**
+ * Resolves the rules whose insert text should be shown to the World Info
+ * scanner: rules that are active, opted into scanning, and actually insert
+ * something (a removal has no text to scan). The insert text is returned raw —
+ * macros are substituted by SillyTavern when the scan reads the injection.
+ * @param {object[]} rules Rule definitions
+ * @param {(rule: object) => boolean} isActive True when the rule applies to the
+ *        current generation (the caller folds in activation state and whether
+ *        the search text is actually found, so phantom text never triggers entries).
+ * @returns {{ rule: object, insert: string }[]}
+ */
+export function collectScanEntries(rules, isActive) {
+    return rules
+        .filter(rule => rule.includeInScan === true && rule.insert && isActive(rule))
+        .map(rule => ({ rule, insert: rule.insert }));
 }
 
 /**

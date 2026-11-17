@@ -26,6 +26,13 @@
 // Macros: search and insert texts are run through substituteParams at apply
 // time, so text copied from the card editor (containing {{char}} etc.)
 // matches the substituted prompt content.
+//
+// World Info scanning: a rule can opt in ("Include in World Info Scanning").
+// While the rule is active and applicable, its insert text is registered as a
+// scan-only injection (setExtensionPrompt, position NONE, scan=true) — ST's
+// checkWorldInfo feeds scan-flagged injections into the scan buffer, so
+// lorebook entries can activate from patch text. The injection itself never
+// enters the assembled prompt; prompt-side text comes solely from the hooks.
 
 import { renderExtensionTemplateAsync, saveMetadataDebounced, writeExtensionField } from '../../../extensions.js';
 import {
@@ -34,6 +41,8 @@ import {
     chat_metadata,
     eventSource,
     event_types,
+    extension_prompt_types,
+    setExtensionPrompt,
     substituteParams,
     this_chid,
 } from '../../../../script.js';
@@ -45,6 +54,7 @@ import { delay, escapeHtml } from '../../../../scripts/utils.js';
 import {
     applyRule,
     applyRules,
+    collectScanEntries,
     genId,
     normalizeRule,
     TARGET_FIELDS,
@@ -190,6 +200,7 @@ function setChatState(ruleId, active) {
         delete states[ruleId];
     }
     saveMetadataDebounced();
+    syncScanInjections(); // activation state decides what the WI scanner sees
 }
 
 /**
@@ -204,6 +215,56 @@ function collectActiveEntries() {
             search: substituteParams(rule.search),
             insert: substituteParams(rule.insert),
         }));
+}
+
+// --- World Info scan registrations (scan-only injections) ---
+
+// Keys this module has currently registered as scan-only injections.
+const scanKeys = new Set();
+
+function scanKeyFor(ruleId) {
+    return `${MODULE_NAME}.${ruleId}`;
+}
+
+/** True when the rule can actually be applied right now — the same check the status dot uses ("ok" / "multi"). */
+function isRuleApplicable(rule) {
+    const validation = validateRule(rule, getFieldText(rule.target));
+    return validation.status === 'ok' || validation.status === 'multi';
+}
+
+/**
+ * Re-syncs the scan-only injections with the current rules. Every rule that is
+ * active, opted into scanning ("Include in World Info Scanning") and applicable
+ * registers its insert text via setExtensionPrompt(position NONE, scan=true):
+ * ST's checkWorldInfo feeds scan-flagged injections into the World Info scan
+ * buffer so lorebook entries can activate from patch text, while position NONE
+ * keeps the injection out of the assembled prompt itself (the prompt-side text
+ * still comes solely from the generation hooks below). Insert text is stored
+ * raw — ST substitutes macros when the scanner reads it.
+ */
+function syncScanInjections() {
+    const desired = new Map();
+    if (hasCharacter()) {
+        for (const entry of collectScanEntries(rules, rule => isRuleActive(rule) && isRuleApplicable(rule))) {
+            desired.set(scanKeyFor(entry.rule.id), entry.insert);
+        }
+    }
+    for (const key of scanKeys) {
+        if (!desired.has(key)) {
+            setExtensionPrompt(key, '', extension_prompt_types.NONE, 0, false);
+            scanKeys.delete(key);
+        }
+    }
+    for (const [key, insert] of desired) {
+        setExtensionPrompt(key, insert, extension_prompt_types.NONE, 0, true);
+        scanKeys.add(key);
+    }
+}
+
+// Every rule-definition mutation persists and re-syncs the scan registrations.
+function onRulesMutated() {
+    schedulePersistRules();
+    syncScanInjections();
 }
 
 // --- Generation hooks (never allowed to break a generation) ---
@@ -423,6 +484,10 @@ function rowHtml(rule) {
                     <small class="cpp-label">${rule.action === 'replace' ? 'With (empty = remove)' : 'Insert this text'}</small>
                     <textarea class="text_pole cpp-insert" rows="2" placeholder="${rule.action === 'replace' ? 'Empty + Replace = remove the found text' : 'Text to insert'}">${escapeHtml(rule.insert)}</textarea>
                 </div>
+                <label class="cpp-checkbox-label" title="While this rule is active and its status dot shows the search text was found, the inserted text is also shown to the World Info scanner, so lorebook entries can activate from it — the same mechanism as Author's Note's 'Include in World Info Scanning' option. Only text the patch adds is scanned, and the scan entry itself never appears in the prompt.">
+                    <input type="checkbox" class="cpp-wi-scan" ${rule.includeInScan ? 'checked' : ''}>
+                    <span>Include in World Info Scanning</span>
+                </label>
                 <div class="cpp-body-actions">
                     <div class="menu_button cpp-preview" title="Show the selected field with this rule applied"><i class="fa-solid fa-eye"></i><span>Preview</span></div>
                     <div class="menu_button cpp-delete" title="Delete this rule"><i class="fa-solid fa-trash-can"></i><span>Delete</span></div>
@@ -441,6 +506,7 @@ function reloadPanel() {
     }
     loadRules();
     refreshPanel();
+    syncScanInjections();
 }
 
 // Renders the current in-memory rules without re-reading storage.
@@ -492,7 +558,7 @@ function addRule() {
     const rule = normalizeRule({ id: genId() });
     rules.push(rule);
     expandedIds.add(rule.id);
-    schedulePersistRules();
+    onRulesMutated();
     refreshPanel();
     panelElement?.find(`.cpp-rule[data-id="${rule.id}"]`)?.[0]?.scrollIntoView({ block: 'nearest' });
     log('rule added', rule.id);
@@ -511,7 +577,7 @@ async function deleteRule(ruleId) {
     expandedIds.delete(ruleId);
     delete getStates()[ruleId];
     saveMetadataDebounced();
-    schedulePersistRules();
+    onRulesMutated();
     refreshPanel();
 }
 
@@ -585,7 +651,7 @@ function wirePanel() {
             return;
         }
         rule.forBotCard = this.checked;
-        schedulePersistRules();
+        onRulesMutated();
         refreshPanel();
     });
 
@@ -595,7 +661,7 @@ function wirePanel() {
             return;
         }
         rule.target = String(this.value);
-        schedulePersistRules();
+        onRulesMutated();
         updateRuleDisplay(rule.id);
     });
 
@@ -605,7 +671,7 @@ function wirePanel() {
             return;
         }
         rule.useRegex = this.checked;
-        schedulePersistRules();
+        onRulesMutated();
         updateRuleDisplay(rule.id);
     });
 
@@ -615,7 +681,7 @@ function wirePanel() {
             return;
         }
         rule.allMatches = this.checked;
-        schedulePersistRules();
+        onRulesMutated();
         updateRuleDisplay(rule.id);
     });
 
@@ -625,7 +691,7 @@ function wirePanel() {
             return;
         }
         rule.action = String(this.value);
-        schedulePersistRules();
+        onRulesMutated();
         refreshPanel(); // re-render updates the insert field's label/placeholder
     });
 
@@ -635,7 +701,7 @@ function wirePanel() {
             return;
         }
         rule.search = String($(this).val() ?? '');
-        schedulePersistRules();
+        onRulesMutated();
         updateRuleDisplay(rule.id);
     });
 
@@ -645,7 +711,7 @@ function wirePanel() {
             return;
         }
         rule.insert = String($(this).val() ?? '');
-        schedulePersistRules();
+        onRulesMutated();
         updateRuleDisplay(rule.id);
     });
 
@@ -655,10 +721,19 @@ function wirePanel() {
             return;
         }
         rule.name = String($(this).val() ?? '');
-        schedulePersistRules();
+        onRulesMutated();
         const nameSpan = $(this).closest('.cpp-rule').find('.cpp-rule-name').first();
         nameSpan.text(rule.name || 'Unnamed patch');
         nameSpan.toggleClass('cpp-rule-unnamed', !rule.name);
+    });
+
+    panel.on('change', '.cpp-wi-scan', function () {
+        const rule = findRuleByRow(this);
+        if (!rule) {
+            return;
+        }
+        rule.includeInScan = this.checked;
+        onRulesMutated();
     });
 
     panel.on('click', '.cpp-preview', function () {

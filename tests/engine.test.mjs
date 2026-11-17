@@ -5,6 +5,7 @@ import {
     TARGET_FIELDS,
     applyRule,
     applyRules,
+    collectScanEntries,
     genId,
     getMatches,
     normalizeRule,
@@ -60,10 +61,11 @@ test('normalizeRule: keeps valid values, repairs invalid ones', () => {
 
 test('normalizeRule: booleans are strict — truthy non-true values coerce to false', () => {
     // Strictness matters: a stored string "false" must not become enabled.
-    const rule = normalizeRule({ useRegex: 1, allMatches: 'yes', forBotCard: 'true' });
+    const rule = normalizeRule({ useRegex: 1, allMatches: 'yes', forBotCard: 'true', includeInScan: 1 });
     assert.equal(rule.useRegex, false);
     assert.equal(rule.allMatches, false);
     assert.equal(rule.forBotCard, false);
+    assert.equal(rule.includeInScan, false);
 });
 
 test('genId: unique across calls', () => {
@@ -232,6 +234,30 @@ test('TARGET_FIELDS: ids unique and ccIdentifiers present', () => {
         assert.ok(field.label);
         assert.ok(field.ccIdentifier);
     }
+});
+
+// --- collectScanEntries (World Info scan registrations) ---
+
+test('collectScanEntries: only active, opted-in rules with insert text pass through', () => {
+    const rules = [
+        normalizeRule({ id: 'a', search: 'x', insert: 'Alpha', includeInScan: true }),
+        normalizeRule({ id: 'b', search: 'x', insert: 'Beta' }), // not opted in
+        normalizeRule({ id: 'c', search: 'x', insert: 'Gamma', includeInScan: true }),
+        normalizeRule({ id: 'd', search: 'x', insert: '', includeInScan: true }), // removal — nothing to scan
+    ];
+    const result = collectScanEntries(rules, rule => ['a', 'd'].includes(rule.id));
+    assert.deepEqual(result.map(e => e.rule.id), ['a']);
+    assert.equal(result[0].insert, 'Alpha');
+});
+
+test('collectScanEntries: insert text passes through raw (macros stay unsubstituted)', () => {
+    const rule = normalizeRule({ id: 'a', search: 'x', insert: '{{char}} is here', includeInScan: true });
+    const result = collectScanEntries([rule], () => true);
+    assert.equal(result[0].insert, '{{char}} is here');
+});
+
+test('collectScanEntries: empty rule list yields no registrations', () => {
+    assert.deepEqual(collectScanEntries([], () => true), []);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
