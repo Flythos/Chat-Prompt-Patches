@@ -431,11 +431,23 @@ function rowHtml(rule) {
         </div>`;
 }
 
-function refreshPanel() {
+// Re-reads rule definitions from the character record, then renders. Use when
+// storage is the source of truth changed: chat switched, card edited externally.
+// NOT after in-memory mutations (add/delete/edit): those persist on a debounce,
+// so re-reading here would clobber them (added rows vanish, deleted ones resurrect).
+function reloadPanel() {
     if (!panelElement) {
         return;
     }
     loadRules();
+    refreshPanel();
+}
+
+// Renders the current in-memory rules without re-reading storage.
+function refreshPanel() {
+    if (!panelElement) {
+        return;
+    }
 
     const charName = getCharacterName();
     panelElement.find('.cpp-title-char').text(charName ? `— ${charName}` : '');
@@ -534,7 +546,7 @@ async function buildPanel() {
     wirePanel();
     loadMovingUIState();
     dragElement(panelElement);
-    refreshPanel();
+    reloadPanel();
 }
 
 function wirePanel() {
@@ -784,9 +796,14 @@ function registerEventListeners() {
         // character first, then reload definitions (same bot, other
         // activation state) and re-render.
         await flushPersistRules();
-        refreshPanel();
+        reloadPanel();
     });
-    eventSource.on(event_types.CHARACTER_EDITED, refreshPanel);
+    eventSource.on(event_types.CHARACTER_EDITED, async () => {
+        // Card edited elsewhere (character editor): flush, then re-read so the
+        // panel reflects what was actually saved.
+        await flushPersistRules();
+        reloadPanel();
+    });
 }
 
 async function init() {

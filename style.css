@@ -22,16 +22,14 @@
     max-width: 94dvw;
     max-height: 90dvh;
     padding: 10px;
-    padding-top: 25px;
     border-radius: 10px;
     border: 1px solid var(--SmartThemeBorderColor);
     box-shadow: 0 0 10px var(--black70a);
     background-color: var(--SmartThemeBlurTintColor);
     overflow: hidden;
-}
-
-#cppPanel .drag-grabber {
-    position: unset;
+    /* Native bottom-right resize handle (dragElement's moving-UI observer
+       records the size into movingUIState, which persists in MovingUI mode). */
+    resize: both;
 }
 
 /* --- titlebar --- */
@@ -41,6 +39,25 @@
     align-items: center;
     gap: 0.5rem;
     margin-bottom: 0.5rem;
+    position: relative;
+}
+
+/* ST's dragElement starts a drag only when the mousedown lands on
+   .drag-grabber inside #<panelId>header — stretch the grabber over the whole
+   titlebar so every spot except the action buttons drags the panel. */
+#cppPanel .drag-grabber {
+    position: absolute;
+    inset: 0;
+    margin: 0;
+    cursor: move;
+}
+
+#cppPanel .cpp-titlebar-actions {
+    display: flex;
+    gap: 0.25rem;
+    /* Keep the buttons clickable above the grabber overlay. */
+    position: relative;
+    z-index: 1;
 }
 
 #cppPanel .cpp-title {
@@ -57,11 +74,6 @@
     overflow: hidden;
     text-overflow: ellipsis;
     flex: 1 1 auto;
-}
-
-#cppPanel .cpp-titlebar-actions {
-    display: flex;
-    gap: 0.25rem;
 }
 
 #cppPanel .cpp-titlebar-actions .menu_button {
@@ -84,6 +96,9 @@
     flex-direction: column;
     gap: 0.5rem;
     overflow-y: auto;
+    /* Shrink with the panel (resize: both) and scroll instead of clipping. */
+    flex: 1 1 auto;
+    min-height: 0;
 }
 
 #cppPanel .cpp-toolbar {
