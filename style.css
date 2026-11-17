@@ -40,6 +40,8 @@
     gap: 0.5rem;
     margin-bottom: 0.5rem;
     position: relative;
+    /* Never compress when the panel is resized small. */
+    flex-shrink: 0;
 }
 
 /* ST's dragElement starts a drag only when the mousedown lands on
@@ -110,6 +112,7 @@
     align-items: center;
     gap: 0.5rem;
     flex-wrap: wrap;
+    flex-shrink: 0;
 }
 
 #cppPanel .cpp-hint {
@@ -141,6 +144,11 @@
     border-radius: 8px;
     background-color: var(--black30a);
     overflow: hidden;
+    /* Cards must keep their natural height. As flex items with overflow:hidden
+       their automatic minimum size is 0, so without this a height-constrained
+       list squishes them (each card clipped to its first rows, list scrollbar
+       never appears) instead of overflowing and scrolling. */
+    flex-shrink: 0;
 }
 
 #cppPanel .cpp-rule-header {
