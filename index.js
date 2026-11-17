@@ -753,7 +753,9 @@ function watchForExtensionsMenu() {
 
 function getExtensionName() {
     try {
-        const rootUrl = new URL('../', import.meta.url); // index.js → extension root
+        // '.' keeps the file's own directory (the extension root); '../' would
+        // climb above it, since URL resolution drops index.js before applying it.
+        const rootUrl = new URL('.', import.meta.url);
         const match = rootUrl.pathname.match(/\/scripts\/extensions\/(.+?)\/?$/);
         if (match) {
             return match[1];
@@ -761,7 +763,7 @@ function getExtensionName() {
     } catch {
         /* fall through */
     }
-    return 'third-party/ChatPromptPatches';
+    return 'third-party/Chat-Prompt-Patches';
 }
 
 // --- Events / init ---
