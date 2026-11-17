@@ -79,17 +79,22 @@ function toast(kind, message) {
 
 // --- Character access ---
 
+/** ST's this_chid is a STRING (setCharacterId stores String(value)); parse it to a numeric index, or -1. */
+function getCharacterIndex() {
+    const index = Number.parseInt(this_chid, 10);
+    return Number.isInteger(index) && index >= 0 ? index : -1;
+}
+
 /** True when a chat is open and it belongs to an individual (non-group) character. */
 function hasCharacter() {
     return !selected_group
-        && Number.isInteger(this_chid)
-        && this_chid >= 0
         && Array.isArray(characters)
-        && Boolean(characters[this_chid]);
+        && getCharacterIndex() >= 0
+        && Boolean(characters[getCharacterIndex()]);
 }
 
 function getCharacter() {
-    return hasCharacter() ? characters[this_chid] : null;
+    return hasCharacter() ? characters[getCharacterIndex()] : null;
 }
 
 function getCharacterName() {
@@ -135,7 +140,7 @@ function loadRules() {
 function schedulePersistRules() {
     // Snapshot at schedule time: whatever the user saw edited is what gets
     // written, even if they switch characters before the debounce fires.
-    const chid = this_chid;
+    const chid = getCharacterIndex();
     const snapshot = JSON.parse(JSON.stringify(rules));
     clearTimeout(persistTimer);
     persistPending = async () => {
