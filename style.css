@@ -1,0 +1,329 @@
+/* Chat Prompt Patches — floating panel + lorebook-style rule rows.
+   Shell pattern matches the panels appended to #movingDivs: ST's dragElement
+   drags it via the .drag-grabber and persists the position through moving-UI
+   state. Row styling borrows the World Info editor's design language:
+   rounded entry boxes, small form-control labels, expand carets. */
+
+.cpp-hidden {
+    display: none !important;
+}
+
+#cppPanel {
+    position: fixed;
+    display: none;
+    flex-direction: column;
+    z-index: 4000;
+    left: 0;
+    top: 0;
+    margin: 0;
+    width: 420px;
+    min-width: 300px;
+    min-height: 120px;
+    max-width: 94dvw;
+    max-height: 90dvh;
+    padding: 10px;
+    padding-top: 25px;
+    border-radius: 10px;
+    border: 1px solid var(--SmartThemeBorderColor);
+    box-shadow: 0 0 10px var(--black70a);
+    background-color: var(--SmartThemeBlurTintColor);
+    overflow: hidden;
+}
+
+#cppPanel .drag-grabber {
+    position: unset;
+}
+
+/* --- titlebar --- */
+
+#cppPanel .cpp-titlebar {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+}
+
+#cppPanel .cpp-title {
+    font-weight: bold;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+#cppPanel .cpp-title-char {
+    font-size: smaller;
+    opacity: 0.7;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 1 1 auto;
+}
+
+#cppPanel .cpp-titlebar-actions {
+    display: flex;
+    gap: 0.25rem;
+}
+
+#cppPanel .cpp-titlebar-actions .menu_button {
+    height: 22px;
+    width: 22px;
+    padding: 0;
+    font-size: 12px;
+    display: grid;
+    place-items: center;
+}
+
+#cppPanel.cpp-minimized .cpp-body {
+    display: none;
+}
+
+/* --- body / toolbar --- */
+
+#cppPanel .cpp-body {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    overflow-y: auto;
+}
+
+#cppPanel .cpp-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+#cppPanel .cpp-hint {
+    font-size: smaller;
+    opacity: 0.75;
+    flex: 1 1 auto;
+    min-width: 10rem;
+}
+
+#cppPanel .cpp-notice {
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 8px;
+    padding: 0.5rem;
+    font-size: smaller;
+    background-color: var(--black30a);
+}
+
+/* --- rule rows (lorebook-entry look) --- */
+
+#cppPanel .cpp-rule-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    overflow-y: auto;
+}
+
+#cppPanel .cpp-rule {
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 8px;
+    background-color: var(--black30a);
+    overflow: hidden;
+}
+
+#cppPanel .cpp-rule-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.4rem 0.5rem;
+    cursor: pointer;
+    border-left: 3px solid transparent;
+}
+
+#cppPanel .cpp-rule-header:hover {
+    background-color: var(--black30a);
+}
+
+#cppPanel .cpp-rule.cpp-expanded .cpp-rule-header {
+    border-left-color: var(--SmartThemeQuoteColor);
+}
+
+/* status dot: grey=off in this chat, green=1 match, amber=multi, red=missing */
+#cppPanel .cpp-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    background-color: var(--grey30a, #808080);
+    border: 1px solid var(--SmartThemeBorderColor);
+}
+
+#cppPanel .cpp-dot.cpp-dot-ok {
+    background-color: var(--okGreen, #2e7d32);
+}
+
+#cppPanel .cpp-dot.cpp-dot-multi {
+    background-color: var(--golden, #c9a227);
+}
+
+#cppPanel .cpp-dot.cpp-dot-missing,
+#cppPanel .cpp-dot.cpp-dot-invalid,
+#cppPanel .cpp-dot.cpp-dot-empty {
+    background-color: var(--crimson, #b3261e);
+}
+
+#cppPanel .cpp-rule-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+#cppPanel .cpp-rule-name.cpp-rule-unnamed {
+    opacity: 0.6;
+    font-style: italic;
+}
+
+#cppPanel .cpp-allchats-badge {
+    font-size: x-small;
+    font-weight: bold;
+    letter-spacing: 0.05em;
+    color: var(--SmartThemeQuoteColor);
+    border: 1px solid var(--SmartThemeQuoteColor);
+    border-radius: 6px;
+    padding: 1px 5px;
+    flex-shrink: 0;
+    white-space: nowrap;
+}
+
+/* slider toggle (per-chat activation) — pill style like the WI entry toggles */
+#cppPanel .cpp-slider {
+    display: inline-flex;
+    align-items: center;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+#cppPanel .cpp-slider input {
+    display: none;
+}
+
+#cppPanel .cpp-slider-track {
+    display: inline-block;
+    position: relative;
+    width: 2.4em;
+    height: 1.15em;
+    border-radius: 0.6em;
+    background-color: var(--black50a, rgba(0, 0, 0, 0.5));
+    border: 1px solid var(--SmartThemeBorderColor);
+    transition: background-color 0.15s ease;
+}
+
+#cppPanel .cpp-slider-knob {
+    position: absolute;
+    top: 1px;
+    left: 1px;
+    width: calc(1.15em - 2px);
+    height: calc(1.15em - 2px);
+    border-radius: 50%;
+    background-color: var(--SmartThemeBodyColor);
+    transition: left 0.15s ease;
+}
+
+#cppPanel .cpp-slider input:checked + .cpp-slider-track {
+    background-color: var(--SmartThemeQuoteColor);
+}
+
+#cppPanel .cpp-slider input:checked + .cpp-slider-track .cpp-slider-knob {
+    left: calc(100% - 1.15em + 1px);
+}
+
+#cppPanel .cpp-expand {
+    flex-shrink: 0;
+    opacity: 0.6;
+    transition: transform 0.15s ease;
+}
+
+#cppPanel .cpp-rule.cpp-expanded .cpp-expand {
+    transform: rotate(90deg);
+}
+
+/* --- expanded rule body --- */
+
+#cppPanel .cpp-rule-body {
+    display: none;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding: 0.5rem 0.65rem 0.65rem;
+    border-top: 1px solid var(--SmartThemeBorderColor);
+}
+
+#cppPanel .cpp-rule.cpp-expanded .cpp-rule-body {
+    display: flex;
+}
+
+#cppPanel .cpp-form-row {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+}
+
+#cppPanel .cpp-form-row-inline {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+#cppPanel .cpp-label {
+    font-size: smaller;
+    opacity: 0.8;
+    margin: 0;
+}
+
+#cppPanel .cpp-form-row textarea,
+#cppPanel .cpp-form-row select,
+#cppPanel .cpp-form-row input[type='text'] {
+    width: 100%;
+    margin-bottom: 0;
+}
+
+#cppPanel .cpp-match-info {
+    font-size: smaller;
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+}
+
+#cppPanel .cpp-match-info.cpp-match-ok {
+    color: var(--okGreen, #2e7d32);
+}
+
+#cppPanel .cpp-match-info.cpp-match-multi {
+    color: var(--golden, #c9a227);
+}
+
+#cppPanel .cpp-match-info.cpp-match-missing,
+#cppPanel .cpp-match-info.cpp-match-invalid,
+#cppPanel .cpp-match-info.cpp-match-empty {
+    color: var(--crimson, #b3261e);
+}
+
+#cppPanel .cpp-checkbox-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: smaller;
+    cursor: pointer;
+}
+
+#cppPanel .cpp-inline-controls {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+}
+
+#cppPanel .cpp-body-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    justify-content: flex-end;
+}
+
+#cppPanel .cpp-delete {
+    color: var(--crimson, #b3261e);
+}

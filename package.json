@@ -1,0 +1,11 @@
+{
+    "name": "chat-prompt-patches",
+    "version": "0.1.0",
+    "private": true,
+    "type": "module",
+    "description": "SillyTavern UI extension: per-chat prompt patches — find text in a character card field and insert before/after it or replace it, at generation time, without editing the card. Rules are defined once per bot; each rule is either active in every chat or toggled per chat with a slider.",
+    "scripts": {
+        "test": "node tests/engine.test.mjs",
+        "audit": "node tests/import-audit.mjs"
+    }
+}

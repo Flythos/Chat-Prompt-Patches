@@ -1,0 +1,13 @@
+{
+    "display_name": "Chat Prompt Patches",
+    "loading_order": 100,
+    "requires": [],
+    "optional": [],
+    "dependencies": [],
+    "js": "index.js",
+    "css": "style.css",
+    "author": "Biede",
+    "version": "0.1.0",
+    "homePage": "https://github.com/Flythos/Chat-Prompt-Patches",
+    "auto_update": true
+}
