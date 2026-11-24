@@ -7,7 +7,7 @@
     "js": "index.js",
     "css": "style.css",
     "author": "Biede",
-    "version": "0.1.8",
+    "version": "0.1.9",
     "homePage": "https://github.com/Flythos/Chat-Prompt-Patches",
     "auto_update": true
 }

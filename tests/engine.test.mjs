@@ -10,6 +10,7 @@ import {
     getMatches,
     normalizeRule,
     validateRule,
+    validateRuleChains,
 } from '../src/engine.js';
 
 let passed = 0;
@@ -272,6 +273,185 @@ test('collectScanEntries: insert text passes through raw (macros stay unsubstitu
 
 test('collectScanEntries: empty rule list yields no registrations', () => {
     assert.deepEqual(collectScanEntries([], () => true), []);
+});
+
+// --- v0.1.9 save-compatibility (old stored arrays must survive load, reorder, save) ---
+
+// A rule array as v0.1.7 wrote it: writes snapshot normalized rules, so all
+// ten keys are present on every entry; targets are limited to the six
+// pre-persona card fields; ids may be UUIDs or the genId() fallback form;
+// name may be empty. Derived from git history (v0.1.7 normalizeRule is
+// byte-identical to the current one apart from TARGET_FIELDS lacking 'persona').
+const v017Fixture = [
+    {
+        id: '0f6ad9e2-3d64-4a58-9ec4-7b21f8a1c9d3',
+        name: 'Warm up the boss',
+        target: 'description',
+        useRegex: false,
+        search: 'She is cold and distant.',
+        action: 'after',
+        insert: '\n\nLately she has been thawing.',
+        allMatches: false,
+        forBotCard: true,
+        includeInScan: false,
+    },
+    {
+        id: 'patch-lx2k1f-3fa9c2d1',
+        name: '',
+        target: 'mes_example',
+        useRegex: true,
+        search: '\\*She smiles\\*',
+        action: 'replace',
+        insert: 'She beams.',
+        allMatches: true,
+        forBotCard: false,
+        includeInScan: true,
+    },
+];
+
+test('compat: v0.1.7-era stored array normalizes with every id, field value and the ORDER preserved', () => {
+    const loaded = v017Fixture.map(normalizeRule);
+    assert.deepEqual(loaded.map(rule => rule.id), v017Fixture.map(rule => rule.id)); // ids + order
+    assert.deepEqual(loaded, v017Fixture); // every field value byte-identical
+    assert.deepEqual(
+        Object.keys(loaded[0]).sort(),
+        ['action', 'allMatches', 'forBotCard', 'id', 'includeInScan', 'insert', 'name', 'search', 'target', 'useRegex'],
+    ); // exactly the ten keys, no shape drift
+});
+
+test('compat: JSON snapshot roundtrip is stable (normalize is idempotent)', () => {
+    const loaded = v017Fixture.map(normalizeRule);
+    const once = JSON.parse(JSON.stringify(loaded)).map(normalizeRule);
+    assert.deepEqual(once, loaded);
+    const twice = JSON.parse(JSON.stringify(once)).map(normalizeRule);
+    assert.deepEqual(twice, once);
+});
+
+test('compat: reorder → snapshot → reload keeps the moved order and stable ids', () => {
+    const loaded = v017Fixture.map(normalizeRule);
+    // Simulate the panel's move-one-down on the first rule.
+    const [moved] = loaded.splice(0, 1);
+    loaded.splice(1, 0, moved);
+    const reloaded = JSON.parse(JSON.stringify(loaded)).map(normalizeRule);
+    assert.deepEqual(reloaded.map(rule => rule.id), [v017Fixture[1].id, v017Fixture[0].id]);
+    assert.deepEqual(reloaded[0], v017Fixture[1]);
+    assert.deepEqual(reloaded[1], v017Fixture[0]);
+});
+
+test('compat: unknown target ids downgrade to description without throwing, other fields intact', () => {
+    const raw = { ...v017Fixture[0], target: 'legacy_field' };
+    const rule = normalizeRule(raw);
+    assert.equal(rule.target, 'description');
+    assert.equal(rule.id, raw.id);
+    assert.equal(rule.name, raw.name);
+    assert.equal(rule.search, raw.search);
+    assert.equal(rule.action, raw.action);
+    assert.equal(rule.insert, raw.insert);
+    assert.equal(rule.useRegex, false);
+    assert.equal(rule.forBotCard, true);
+});
+
+test('compat: chaining order guarantee — rule N\'s insert is rule N+1\'s search text, in list order', () => {
+    const marker = normalizeRule({ id: 'r1', name: 'insert marker', search: 'She is cold.', action: 'after', insert: ' [MARKER]' });
+    const seeker = normalizeRule({ id: 'r2', name: 'find marker', search: '[MARKER]', action: 'replace', insert: '[FOUND]' });
+    // collectActiveEntries (index.js) passes active rules through filter+map,
+    // preserving array order; applyRules consumes them sequentially.
+    const chained = applyRules('She is cold.', [{ rule: marker }, { rule: seeker }]);
+    assert.equal(chained.text, 'She is cold. [FOUND]');
+    assert.deepEqual(chained.results.map(r => r.appliedCount), [1, 1]);
+    // Swapped order breaks the chain: the seeker runs first and finds nothing.
+    const swapped = applyRules('She is cold.', [{ rule: seeker }, { rule: marker }]);
+    assert.equal(swapped.text, 'She is cold. [MARKER]');
+    assert.equal(swapped.results[0].appliedCount, 0);
+    assert.equal(swapped.results[1].appliedCount, 1);
+});
+
+// --- validateRuleChains (chain-aware status dots / scan gating) ---
+
+const chainField = 'She is cold and distant.';
+
+test('validateRuleChains: an active earlier rule\'s insert satisfies a later rule\'s search', () => {
+    const first = normalizeRule({ id: 'a', target: 'description', search: 'She is cold', action: 'after', insert: ' [MARKER]' });
+    const second = normalizeRule({ id: 'b', target: 'description', search: '[MARKER]', action: 'replace', insert: 'x' });
+    const result = validateRuleChains([first, second], () => true, () => chainField);
+    assert.equal(result.get('a').status, 'ok');
+    assert.equal(result.get('b').status, 'ok'); // would be 'missing' without the chain
+});
+
+test('validateRuleChains: swapped order — the dependent rule reports missing', () => {
+    const first = normalizeRule({ id: 'a', target: 'description', search: 'She is cold', action: 'after', insert: ' [MARKER]' });
+    const second = normalizeRule({ id: 'b', target: 'description', search: '[MARKER]', action: 'replace', insert: 'x' });
+    const result = validateRuleChains([second, first], () => true, () => chainField);
+    assert.equal(result.get('a').status, 'ok');
+    assert.equal(result.get('b').status, 'missing');
+});
+
+test('validateRuleChains: an inactive rule is validated against the chain but does not feed it', () => {
+    const first = normalizeRule({ id: 'a', target: 'description', search: 'She is cold', action: 'after', insert: ' [MARKER]' });
+    const second = normalizeRule({ id: 'b', target: 'description', search: '[MARKER]', action: 'replace', insert: 'x' });
+    const result = validateRuleChains([first, second], rule => rule.id !== 'a', () => chainField);
+    // 'a' is off: it still validates (found in the raw field) but inserts
+    // nothing, so the dependent rule drops back to missing.
+    assert.equal(result.get('a').status, 'ok');
+    assert.equal(result.get('b').status, 'missing');
+});
+
+test('validateRuleChains: cross-field chain — the chat-completion fallback finds text another field\'s rule inserted', () => {
+    const order = TARGET_FIELDS.map(field => field.id);
+    const first = normalizeRule({ id: 'a', target: 'description', search: 'She is cold', action: 'after', insert: ' [MARKER]' });
+    const second = normalizeRule({ id: 'b', target: 'scenario', search: '[MARKER]', action: 'after', insert: ' CONFIRMED' });
+    const third = normalizeRule({ id: 'c', target: 'description', search: 'CONFIRMED', action: 'replace', insert: 'HIT' });
+    const result = validateRuleChains(
+        [first, second, third],
+        () => true,
+        target => (target === 'description' ? chainField : 'A quiet room.'),
+        order,
+    );
+    assert.equal(result.get('a').status, 'ok');
+    // b's own field (scenario) lacks the text, but the fallback model finds it
+    // in description — matching applyEntryToMessages' cross-field fallback.
+    assert.equal(result.get('b').status, 'ok');
+    assert.equal(result.get('b').fallback, 'Description');
+    assert.match(result.get('b').warning, /only exists in Description/);
+    // Feed-forward: b's insert landed in description's simulated text, so the
+    // later description rule finds it there via the primary path.
+    assert.equal(result.get('c').status, 'ok');
+    assert.equal(result.get('c').fallback, undefined);
+});
+
+test('validateRuleChains: no fallback claim when the search exists in the rule\'s own field', () => {
+    const order = TARGET_FIELDS.map(field => field.id);
+    const rule = normalizeRule({ id: 'a', target: 'scenario', search: 'quiet', action: 'replace', insert: 'loud' });
+    const result = validateRuleChains([rule], () => true, target => (target === 'scenario' ? 'A quiet room.' : 'She is cold.'), order);
+    assert.equal(result.get('a').status, 'ok');
+    assert.equal(result.get('a').fallback, undefined);
+    assert.equal(result.get('a').warning, null);
+});
+
+test('validateRuleChains: text absent from every field stays missing (the rule will truly do nothing)', () => {
+    const order = TARGET_FIELDS.map(field => field.id);
+    const rule = normalizeRule({ id: 'a', target: 'scenario', search: 'GHOST', action: 'replace', insert: 'x' });
+    const result = validateRuleChains([rule], () => true, () => 'A quiet room.', order);
+    assert.equal(result.get('a').status, 'missing');
+    assert.equal(result.get('a').fallback, undefined);
+});
+
+test('validateRuleChains: an active removal makes a dependent later rule miss', () => {
+    const remover = normalizeRule({ id: 'a', target: 'description', search: ' [MARKER]', action: 'replace', insert: '' });
+    const seeker = normalizeRule({ id: 'b', target: 'description', search: '[MARKER]', action: 'replace', insert: 'x' });
+    const result = validateRuleChains([remover, seeker], () => true, () => 'seed [MARKER]');
+    assert.equal(result.get('a').status, 'ok');
+    assert.equal(result.get('b').status, 'missing');
+});
+
+test('validateRuleChains: every rule gets a result, keyed by id, in list order', () => {
+    const rules = [
+        normalizeRule({ id: 'a', target: 'description', search: 'x', insert: 'y' }),
+        normalizeRule({ id: 'b', target: 'persona', search: 'x', insert: 'y' }),
+    ];
+    const result = validateRuleChains(rules, () => true, () => 'x');
+    assert.deepEqual([...result.keys()], ['a', 'b']);
+    assert.deepEqual([...result.values()].map(v => v.status), ['ok', 'ok']);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

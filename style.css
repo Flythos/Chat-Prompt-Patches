@@ -259,6 +259,19 @@
     left: calc(100% - 1.15em + 1px);
 }
 
+/* move buttons (list order = apply order) — same caret look as .cpp-expand;
+   greyed out at the ends where there is nothing to move into */
+#cppPanel .cpp-move {
+    flex-shrink: 0;
+    opacity: 0.6;
+    cursor: pointer;
+}
+
+#cppPanel .cpp-move.cpp-move-disabled {
+    opacity: 0.2;
+    cursor: default;
+}
+
 #cppPanel .cpp-expand {
     flex-shrink: 0;
     opacity: 0.6;

@@ -123,6 +123,82 @@ export function validateRule(rule, fieldText) {
 }
 
 /**
+ * Chain-aware validation: walks the rules in list order while keeping one
+ * simulated text per target field, mirroring what the generation hooks do:
+ *  - Primary: a rule validates against its own target's simulated text, and
+ *    an ACTIVE rule's outcome is applied to that text, so later rules see
+ *    what earlier active rules leave behind.
+ *  - Fallback: when the search misses the rule's own field, the chat-completion
+ *    hook's fallback (applyEntryToMessages) still patches the first system-role
+ *    message containing the text — in whichever field that message belongs to.
+ *    The other fields' simulated texts are therefore probed in `targetOrder`
+ *    (an approximation of the runtime prompt order — the real order is the
+ *    user's prompt manager). A hit marks the validation with `fallback` (the
+ *    field's label) and, for an active rule, the outcome is applied to THAT
+ *    field's text so later rules chain off it, as they do at generation.
+ *
+ * Inactive rules are validated against the current simulated texts but never
+ * mutate them (they will not run at generation, so they must not feed the
+ * chain either).
+ *
+ * @param {object[]} rules Rule definitions, in list (application) order
+ * @param {(rule: object) => boolean} isActive True when the rule applies to
+ *        the current generation (forBotCard, or slider on in this chat)
+ * @param {(target: string) => string} textForTarget Current text of a target field
+ * @param {string[]} [targetOrder] Target ids to probe when the search misses
+ *        the rule's own field, in approximate prompt order (TARGET_FIELDS)
+ * @returns {Map<string, object>} rule id → validateRule() result, plus a
+ *          `fallback` field (the other field's label) when the search text
+ *          only exists in that other field
+ */
+export function validateRuleChains(rules, isActive, textForTarget, targetOrder = []) {
+    const texts = new Map();
+    const results = new Map();
+    const textFor = target => {
+        if (!texts.has(target)) {
+            texts.set(target, String(textForTarget(target) ?? ''));
+        }
+        return texts.get(target);
+    };
+    for (const rule of rules) {
+        let validation = validateRule(rule, textFor(rule.target));
+        let appliedTo = rule.target;
+        if (validation.status === 'missing') {
+            for (const target of targetOrder) {
+                if (target === rule.target) {
+                    continue; // own field just missed — that is why we are here
+                }
+                const { matches, error } = getMatches(textFor(target), { search: rule.search, useRegex: rule.useRegex });
+                if (error || matches.length === 0) {
+                    continue;
+                }
+                const label = TARGET_FIELDS.find(field => field.id === target)?.label ?? target;
+                validation = {
+                    status: matches.length === 1 ? 'ok' : 'multi',
+                    count: matches.length,
+                    error: null,
+                    warning: [validation.warning, `Search text only exists in ${label} — at generation the fallback patches that message instead of this field.`].filter(Boolean).join(' '),
+                    fallback: label,
+                };
+                appliedTo = target;
+                break;
+            }
+        }
+        results.set(rule.id, validation);
+        // Mirror applyRules: only active rules mutate the text, and only when
+        // they actually applied — a missing/invalid/empty search is the same
+        // no-op here as it is at generation time.
+        if (isActive(rule)) {
+            const outcome = applyRule(texts.get(appliedTo), rule);
+            if (outcome.appliedCount > 0) {
+                texts.set(appliedTo, outcome.text);
+            }
+        }
+    }
+    return results;
+}
+
+/**
  * Resolves the rules whose insert text should be shown to the World Info
  * scanner: rules that are active, opted into scanning, and actually insert
  * something (a removal has no text to scan). The insert text is returned raw —

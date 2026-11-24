@@ -58,7 +58,7 @@ import {
     genId,
     normalizeRule,
     TARGET_FIELDS,
-    validateRule,
+    validateRuleChains,
 } from './src/engine.js';
 
 // `$` (jQuery) and `toastr` are page-level globals provided by SillyTavern.
@@ -231,10 +231,26 @@ function scanKeyFor(ruleId) {
     return `${MODULE_NAME}.${ruleId}`;
 }
 
-/** True when the rule can actually be applied right now — the same check the status dot uses ("ok" / "multi"). */
-function isRuleApplicable(rule) {
-    const validation = validateRule(rule, getFieldText(rule.target));
-    return validation.status === 'ok' || validation.status === 'multi';
+/**
+ * Chain-aware validation for the current rules (see validateRuleChains in the
+ * engine): rules are validated against what the ACTIVE rules before them
+ * leave behind, in list order — own field first, then (mirroring the
+ * chat-completion fallback) the other fields' texts. TARGET_FIELDS order is
+ * the probe order approximation: which prompt message the fallback really
+ * patches is decided by the user's live prompt order at generation time.
+ */
+function chainValidations() {
+    return validateRuleChains(rules, isRuleActive, getFieldText, TARGET_FIELDS.map(field => field.id));
+}
+
+/**
+ * True when the rule can actually be applied right now — the same check the
+ * status dot uses ("ok" / "multi"). Pass a precomputed chain validation to
+ * avoid re-walking the rule chain once per rule.
+ */
+function isRuleApplicable(rule, validation) {
+    const status = (validation ?? chainValidations().get(rule.id))?.status;
+    return status === 'ok' || status === 'multi';
 }
 
 /**
@@ -250,7 +266,8 @@ function isRuleApplicable(rule) {
 function syncScanInjections() {
     const desired = new Map();
     if (hasCharacter()) {
-        for (const entry of collectScanEntries(rules, rule => isRuleActive(rule) && isRuleApplicable(rule))) {
+        const validations = chainValidations();
+        for (const entry of collectScanEntries(rules, rule => isRuleActive(rule) && isRuleApplicable(rule, validations.get(rule.id)))) {
             desired.set(scanKeyFor(entry.rule.id), entry.insert);
         }
     }
@@ -408,11 +425,13 @@ function dotStatusText(rule, validation, active) {
     const base = {
         ok: 'Found exactly once',
         multi: `Found ${validation.count} times`,
-        missing: 'Search text not found in the field',
+        missing: 'Not found in this field or any other — the rule will not do anything',
         invalid: validation.error ?? 'Invalid search pattern',
         empty: 'No search text entered',
     }[validation.status] ?? '';
-    return `${base}${active ? '' : ' — rule is OFF in this chat'}`;
+    // Cross-field hit: the rule still applies, just to another field's message.
+    const fallbackNote = validation.fallback ? ` (only in ${validation.fallback} — the fallback patches that message)` : '';
+    return `${base}${fallbackNote}${active ? '' : ' — rule is OFF in this chat'}`;
 }
 
 function matchInfoHtml(validation) {
@@ -427,7 +446,7 @@ function matchInfoHtml(validation) {
     const texts = {
         ok: 'Found exactly once',
         multi: `Found ${validation.count} times — first one is used unless "all matches" is set`,
-        missing: 'Not found in the field — the rule will not do anything',
+        missing: 'Not found in this field or any other — the rule will not do anything',
         invalid: validation.error ?? 'Invalid search pattern',
         empty: 'No search text entered',
     };
@@ -437,15 +456,19 @@ function matchInfoHtml(validation) {
 
 // --- Panel rendering ---
 
-function rowHtml(rule) {
+function rowHtml(rule, index, validations) {
     const active = isRuleActive(rule);
-    const validation = validateRule(rule, getFieldText(rule.target));
+    const validation = validations.get(rule.id);
     const expanded = expandedIds.has(rule.id);
 
     const dotClass = active ? `cpp-dot cpp-dot-${validation.status}` : 'cpp-dot';
     const dotTitle = escapeHtml(dotStatusText(rule, validation, active));
     const nameClass = rule.name ? 'cpp-rule-name' : 'cpp-rule-name cpp-rule-unnamed';
     const nameText = escapeHtml(rule.name || 'Unnamed patch');
+
+    const isFirst = index === 0;
+    const isLast = index === rules.length - 1;
+    const moveTip = 'rules apply in list order; text an earlier rule inserts can be the search text of a later rule';
 
     let scopeControl;
     if (rule.forBotCard) {
@@ -468,6 +491,8 @@ function rowHtml(rule) {
                 <span class="${dotClass}" title="${dotTitle}"></span>
                 <span class="${nameClass}">${nameText}</span>
                 ${scopeControl}
+                <i class="cpp-move cpp-move-up fa-solid fa-chevron-up fa-sm${isFirst ? ' cpp-move-disabled' : ''}" title="${isFirst ? 'Already the first rule' : `Move earlier — ${moveTip}`}"></i>
+                <i class="cpp-move cpp-move-down fa-solid fa-chevron-down fa-sm${isLast ? ' cpp-move-disabled' : ''}" title="${isLast ? 'Already the last rule' : `Move later — ${moveTip}`}"></i>
                 <i class="cpp-expand fa-solid fa-chevron-right fa-sm"></i>
             </div>
             <div class="cpp-rule-body">
@@ -558,21 +583,30 @@ function refreshPanel() {
 
     notice.addClass('cpp-hidden');
     addButton.removeClass('cpp-hidden');
-    list.html(rules.map(rowHtml).join(''));
+    const validations = chainValidations();
+    list.html(rules.map((rule, index) => rowHtml(rule, index, validations)).join(''));
 }
 
-function updateRuleDisplay(ruleId) {
-    const row = panelElement?.find(`.cpp-rule[data-id="${ruleId}"]`);
-    const rule = rules.find(candidate => candidate.id === ruleId);
-    if (!row || !rule) {
-        return;
+// Re-validates every row's status dot and match info in place (no storage
+// read, no rebuild of the form fields). Chain validation depends on the
+// activation states and the other rules' texts, so ANY of those changes —
+// a toggle, a search/insert edit — re-validates ALL rows: a rule searching
+// for text an earlier rule inserts flips between found/missing as that
+// earlier rule is toggled or edited.
+function updateRuleDisplays() {
+    const validations = chainValidations();
+    for (const rule of rules) {
+        const row = panelElement?.find(`.cpp-rule[data-id="${rule.id}"]`);
+        if (!row || !row.length) {
+            continue;
+        }
+        const validation = validations.get(rule.id);
+        const active = isRuleActive(rule);
+        const dot = row.find('.cpp-dot').first();
+        dot.attr('class', active ? `cpp-dot cpp-dot-${validation.status}` : 'cpp-dot');
+        dot.attr('title', dotStatusText(rule, validation, active));
+        row.find('.cpp-match-info').first().replaceWith(matchInfoHtml(validation));
     }
-    const active = isRuleActive(rule);
-    const validation = validateRule(rule, getFieldText(rule.target));
-    const dot = row.find('.cpp-dot').first();
-    dot.attr('class', active ? `cpp-dot cpp-dot-${validation.status}` : 'cpp-dot');
-    dot.attr('title', dotStatusText(rule, validation, active));
-    row.find('.cpp-match-info').first().replaceWith(matchInfoHtml(validation));
 }
 
 // Light refresh after persona state changed (persona switch or description
@@ -584,9 +618,7 @@ function refreshPersonaState() {
     if (!panelElement) {
         return;
     }
-    for (const rule of rules) {
-        updateRuleDisplay(rule.id);
-    }
+    updateRuleDisplays();
     syncScanInjections();
 }
 
@@ -612,6 +644,26 @@ function addRule() {
     refreshPanel();
     panelElement?.find(`.cpp-rule[data-id="${rule.id}"]`)?.[0]?.scrollIntoView({ block: 'nearest' });
     log('rule added', rule.id);
+}
+
+// Moves a rule one slot up or down. The array order IS the application order
+// (applyRules consumes rules top to bottom), so this persists through the same
+// debounced snapshot write as any other edit — the saved array is the saved
+// order. expandedIds is keyed by rule id, so an expanded row stays expanded
+// through the re-render; nothing else (slider states, scan keys) is
+// position-dependent.
+function moveRule(ruleId, offset) {
+    const from = rules.findIndex(candidate => candidate.id === ruleId);
+    const to = from + offset;
+    if (from === -1 || to < 0 || to >= rules.length) {
+        return; // not found, or already at an end (the greyed-out chevron)
+    }
+    const [moved] = rules.splice(from, 1);
+    rules.splice(to, 0, moved);
+    onRulesMutated();
+    refreshPanel();
+    panelElement?.find(`.cpp-rule[data-id="${ruleId}"]`)?.[0]?.scrollIntoView({ block: 'nearest' });
+    log(`rule "${ruleLabel(moved)}" moved to position ${to + 1} of ${rules.length}`);
 }
 
 async function deleteRule(ruleId) {
@@ -675,8 +727,8 @@ function wirePanel() {
     // Delegated events — rows are re-rendered as a whole, so handlers live on
     // the panel, not on individual rows.
     panel.on('click', '.cpp-rule-header', function (event) {
-        if ($(event.target).closest('.cpp-slider, input').length > 0) {
-            return; // slider clicks must not toggle expansion
+        if ($(event.target).closest('.cpp-slider, input, .cpp-move').length > 0) {
+            return; // slider and move-button clicks must not toggle expansion
         }
         const row = $(this).closest('.cpp-rule');
         const ruleId = String(row.data('id'));
@@ -689,10 +741,19 @@ function wirePanel() {
         }
     });
 
+    panel.on('click', '.cpp-move', function (event) {
+        // Both handlers are delegated on the panel, so stopPropagation alone
+        // cannot keep the .cpp-rule-header handler above from also firing —
+        // its closest('.cpp-move') guard is what prevents the toggle.
+        event.stopPropagation();
+        const ruleId = String($(this).closest('.cpp-rule').data('id'));
+        moveRule(ruleId, $(this).hasClass('cpp-move-up') ? -1 : 1);
+    });
+
     panel.on('change', '.cpp-chat-toggle', function () {
         const row = $(this).closest('.cpp-rule');
         setChatState(String(row.data('id')), this.checked);
-        updateRuleDisplay(String(row.data('id')));
+        updateRuleDisplays(); // activation feeds the chain — later rules' dots may flip
     });
 
     panel.on('change', '.cpp-forbotcard', function () {
@@ -712,7 +773,7 @@ function wirePanel() {
         }
         rule.target = String(this.value);
         onRulesMutated();
-        updateRuleDisplay(rule.id);
+        updateRuleDisplays();
     });
 
     panel.on('change', '.cpp-use-regex', function () {
@@ -722,7 +783,7 @@ function wirePanel() {
         }
         rule.useRegex = this.checked;
         onRulesMutated();
-        updateRuleDisplay(rule.id);
+        updateRuleDisplays();
     });
 
     panel.on('change', '.cpp-all-matches', function () {
@@ -732,7 +793,7 @@ function wirePanel() {
         }
         rule.allMatches = this.checked;
         onRulesMutated();
-        updateRuleDisplay(rule.id);
+        updateRuleDisplays();
     });
 
     panel.on('change', '.cpp-action', function () {
@@ -752,7 +813,7 @@ function wirePanel() {
         }
         rule.search = String($(this).val() ?? '');
         onRulesMutated();
-        updateRuleDisplay(rule.id);
+        updateRuleDisplays();
     });
 
     panel.on('input', '.cpp-insert', function () {
@@ -762,7 +823,7 @@ function wirePanel() {
         }
         rule.insert = String($(this).val() ?? '');
         onRulesMutated();
-        updateRuleDisplay(rule.id);
+        updateRuleDisplays();
     });
 
     panel.on('input', '.cpp-name-input', function () {
