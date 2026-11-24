@@ -30,6 +30,13 @@ export const TARGET_FIELDS = [
     // Example messages become several messages: 'dialogueExamples' plus
     // per-example 'dialogueExamples <i>-<j>' variants — prefix matched.
     { id: 'mes_example', label: 'Example Messages (card)', ccIdentifier: 'dialogueExamples', ccPrefixMatch: true },
+    // The chat's selected user persona. ST only builds the message when the
+    // description is non-empty AND its position is "In prompt" (openai.js);
+    // other positions leave no persona message — the rule then runs through
+    // the system-role fallback or finds nothing. (ST 1.19 strips identifiers
+    // from the CHAT_COMPLETION_PROMPT_READY payload entirely, so for every
+    // target here the content fallback is what actually locates messages.)
+    { id: 'persona', label: 'User Persona (this chat)', ccIdentifier: 'personaDescription' },
 ];
 
 export const ACTIONS = ['before', 'after', 'replace'];

@@ -236,6 +236,20 @@ test('TARGET_FIELDS: ids unique and ccIdentifiers present', () => {
     }
 });
 
+test('normalizeRule: accepts the persona target', () => {
+    assert.equal(normalizeRule({ target: 'persona' }).target, 'persona');
+});
+
+test('TARGET_FIELDS: persona carries the verified chat-completion identifier', () => {
+    const persona = TARGET_FIELDS.find(f => f.id === 'persona');
+    assert.ok(persona, 'persona target exists');
+    // openai.js builds the message as { role: 'system', identifier: 'personaDescription' }
+    assert.equal(persona.ccIdentifier, 'personaDescription');
+    // ST strips identifiers from the CHAT_COMPLETION_PROMPT_READY payload, so
+    // prefix matching could never fire — the field must not set it.
+    assert.equal(persona.ccPrefixMatch, undefined);
+});
+
 // --- collectScanEntries (World Info scan registrations) ---
 
 test('collectScanEntries: only active, opted-in rules with insert text pass through', () => {

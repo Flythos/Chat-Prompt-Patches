@@ -48,7 +48,7 @@ import {
 } from '../../../../script.js';
 import { selected_group } from '../../../../scripts/group-chats.js';
 import { callGenericPopup, POPUP_RESULT, POPUP_TYPE } from '../../../../scripts/popup.js';
-import { loadMovingUIState } from '../../../../scripts/power-user.js';
+import { loadMovingUIState, power_user } from '../../../../scripts/power-user.js';
 import { dragElement } from '../../../../scripts/RossAscends-mods.js';
 import { delay, escapeHtml } from '../../../../scripts/utils.js';
 import {
@@ -130,6 +130,11 @@ function getFieldText(target) {
             return String(char.post_history_instructions ?? '');
         case 'mes_example':
             return String(char.mes_example ?? '');
+        case 'persona':
+            // Not a card field: ST injects the live mirror value
+            // (personas.js keeps power_user.persona_description synced with
+            // the chat's selected persona). No/empty persona → ''.
+            return String(power_user.persona_description ?? '');
         default:
             return '';
     }
@@ -309,12 +314,12 @@ function onChatCompletionPromptReady(eventData) {
 }
 
 /**
- * Chat completion messages carry identifiers, so prefer the field's own
- * message. If the field's message is missing entirely (empty field, or the
- * squash of consecutive system messages placed the content under a different
- * identifier), fall back to the first system-role message containing the
- * search text — chat history (user/assistant) is never touched by the
- * fallback.
+ * ST 1.19 strips identifiers from the CHAT_COMPLETION_PROMPT_READY payload,
+ * so the identifier lookup never matches and the content search below is
+ * what actually locates the message: prefer a system message holding the
+ * field's exact current text (the dedicated message), then the first
+ * system-role message containing the search text — chat history
+ * (user/assistant) is never touched.
  */
 function applyEntryToMessages(messages, entry) {
     const rule = entry.rule;
@@ -327,6 +332,27 @@ function applyEntryToMessages(messages, entry) {
     if (candidates.length > 0) {
         patchMessage(candidates[0], entry, field.label, false);
         return;
+    }
+
+    // Prefer a system message holding the field's exact current text: for the
+    // persona target that is the dedicated persona message (ST pushes
+    // power_user.persona_description verbatim), which a {{persona}} macro
+    // expansion in an earlier system message (e.g. the main prompt) must not
+    // shadow. Exact matches are scanned from the end — the default prompt
+    // order places the persona message after the main prompt, so when both
+    // hold identical text the later one is the dedicated message.
+    const fieldText = getFieldText(rule.target);
+    if (fieldText) {
+        for (let i = messages.length - 1; i >= 0; i--) {
+            const message = messages[i];
+            if (typeof message?.content === 'string'
+                && message.role === 'system'
+                && message.content === fieldText
+                && message.content.includes(entry.search)) {
+                patchMessage(message, entry, field.label, true);
+                return;
+            }
+        }
     }
 
     const fallback = messages.find(message =>
@@ -547,6 +573,30 @@ function updateRuleDisplay(ruleId) {
     dot.attr('class', active ? `cpp-dot cpp-dot-${validation.status}` : 'cpp-dot');
     dot.attr('title', dotStatusText(rule, validation, active));
     row.find('.cpp-match-info').first().replaceWith(matchInfoHtml(validation));
+}
+
+// Light refresh after persona state changed (persona switch or description
+// edit): re-validates every row's status dot in place and re-syncs the WI
+// scan registrations, without re-reading storage or rebuilding the list —
+// the rule definitions themselves are unchanged, and PERSONA_UPDATED fires
+// per keystroke (possibly while the panel is hidden).
+function refreshPersonaState() {
+    if (!panelElement) {
+        return;
+    }
+    for (const rule of rules) {
+        updateRuleDisplay(rule.id);
+    }
+    syncScanInjections();
+}
+
+let personaRefreshTimer = null;
+// ST only emits PERSONA_UPDATED for personas with a bound name; an unnamed
+// persona's description still reaches the prompt, so watch the persona
+// editor's input directly (debounced — the input event fires per keystroke).
+function schedulePersonaRefresh() {
+    clearTimeout(personaRefreshTimer);
+    personaRefreshTimer = setTimeout(refreshPersonaState, 300);
 }
 
 // --- Panel actions ---
@@ -879,12 +929,21 @@ function registerEventListeners() {
         await flushPersistRules();
         reloadPanel();
     });
+    // Persona switched or its description edited: the rule definitions are
+    // untouched (persona state lives outside the character record), so do NOT
+    // reload from storage here — a reload would revert rule edits still inside
+    // the 400ms persist debounce. Only re-validate the status dots and re-sync
+    // the WI scan registrations (ST syncs the persona mirror before these
+    // fire; PERSONA_UPDATED arrives on every keystroke of the persona editor).
+    eventSource.on(event_types.PERSONA_CHANGED, refreshPersonaState);
+    eventSource.on(event_types.PERSONA_UPDATED, refreshPersonaState);
 }
 
 async function init() {
     await buildPanel();
     injectMenuButton();
     registerEventListeners();
+    $('#persona_description').on('input', schedulePersonaRefresh);
     log('ready');
 }
 
